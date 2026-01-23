@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Poll {
+  id        String   @id @default(uuid())
+  question  String
+  isOpen    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  creator   User?    @relation(fields: [creatorId], references: [id])
+  creatorId String?
+  options   Option[]
+  votes     Vote[]
+  participations PollParticipation[]
+}
+
+model Option {
+  id     String @id @default(uuid())
+  poll   Poll   @relation(fields: [pollId], references: [id])
+  pollId String
+  text   String
+  order  Int
+  votes  Vote[]
+}
+
+model Vote {
+  id        String   @id @default(uuid())
+  poll      Poll     @relation(fields: [pollId], references: [id])
+  pollId    String
+  option    Option   @relation(fields: [optionId], references: [id])
+  optionId  String
+  voterId   String
+  createdAt DateTime @default(now())
+
+  @@unique([pollId, voterId])
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  name         String?
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  polls        Poll[]
+  sessions     Session[]
+  participations PollParticipation[]
+}
+
+model PollParticipation {
+  id        String   @id @default(uuid())
+  poll      Poll     @relation(fields: [pollId], references: [id])
+  pollId    String
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  joinedAt  DateTime @default(now())
+
+  @@unique([userId, pollId])
+  @@index([pollId])
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  tokenHash String   @unique
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
