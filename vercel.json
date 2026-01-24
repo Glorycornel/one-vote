@@ -1,0 +1,3 @@
+{
+  "buildCommand": "pnpm --dir web exec prisma migrate deploy && pnpm --dir web build"
+}
