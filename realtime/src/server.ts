@@ -16,8 +16,24 @@ const app = express();
 const httpServer = createServer(app);
 
 const webOrigin = process.env.WEB_ORIGIN ?? "http://localhost:3000";
+const normalizeRedisUrl = (url: string) => {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "redis:" && parsed.hostname.endsWith("upstash.io")) {
+      parsed.protocol = "rediss:";
+      return parsed.toString();
+    }
+  } catch {
+    return url;
+  }
+  return url;
+};
+
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
-const redis = new Redis(redisUrl, { maxRetriesPerRequest: 2 });
+const redis = new Redis(normalizeRedisUrl(redisUrl), { maxRetriesPerRequest: 2 });
+redis.on("error", (error) => {
+  console.error("Redis error", error);
+});
 
 app.use(
   cors({
