@@ -4,7 +4,7 @@ import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import Redis from "ioredis";
-import { prisma } from "../../web/src/lib/prisma";
+import prisma from "../../web/src/lib/prisma";
 import {
   isUniqueConstraintError,
   normalizeCounts,
