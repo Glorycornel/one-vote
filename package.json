@@ -31,5 +31,8 @@
     "realtime/**/*.{js,jsx,ts,tsx}": [
       "pnpm --filter realtime exec eslint --max-warnings=0"
     ]
+  },
+  "prisma": {
+    "schema": "web/prisma/schema.prisma"
   }
 }
