@@ -13,7 +13,8 @@
     "lint:web": "pnpm --filter web lint",
     "lint:realtime": "pnpm --filter realtime lint",
     "format": "prettier --write .",
-    "prepare": "husky"
+    "prepare": "husky",
+    "postinstall": "pnpm --dir web exec prisma generate"
   },
   "devDependencies": {
     "husky": "^9.1.6",
