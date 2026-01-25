@@ -3,8 +3,8 @@ import cors from "cors";
 import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import { PrismaClient } from "@prisma/client";
 import Redis from "ioredis";
-import prisma from "../../web/src/lib/prisma";
 import {
   isUniqueConstraintError,
   normalizeCounts,
@@ -14,6 +14,16 @@ import {
 
 const app = express();
 const httpServer = createServer(app);
+const globalForPrisma = globalThis as { prisma?: PrismaClient };
+const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: ["error", "warn"],
+  });
+
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.prisma = prisma;
+}
 
 const normalizeOrigin = (origin: string) => origin.replace(/\/$/, "");
 const webOriginEnv = process.env.WEB_ORIGIN ?? "http://localhost:3000";
