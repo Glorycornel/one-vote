@@ -15,7 +15,17 @@ import {
 const app = express();
 const httpServer = createServer(app);
 
-const webOrigin = process.env.WEB_ORIGIN ?? "http://localhost:3000";
+const normalizeOrigin = (origin: string) => origin.replace(/\/$/, "");
+const webOriginEnv = process.env.WEB_ORIGIN ?? "http://localhost:3000";
+const webOrigins = new Set(
+  webOriginEnv
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+    .map(normalizeOrigin),
+);
+const isAllowedOrigin = (origin?: string | null) =>
+  !origin || webOrigins.has(normalizeOrigin(origin));
 const normalizeRedisUrl = (url: string) => {
   try {
     const parsed = new URL(url);
@@ -37,7 +47,9 @@ redis.on("error", (error) => {
 
 app.use(
   cors({
-    origin: webOrigin,
+    origin: (origin, callback) => {
+      callback(null, isAllowedOrigin(origin));
+    },
     credentials: true,
   }),
 );
@@ -48,7 +60,9 @@ app.get("/health", (_req, res) => {
 
 const io = new Server(httpServer, {
   cors: {
-    origin: webOrigin,
+    origin: (origin, callback) => {
+      callback(null, isAllowedOrigin(origin));
+    },
     credentials: true,
   },
 });
