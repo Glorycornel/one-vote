@@ -10,9 +10,9 @@ COPY realtime/package.json realtime/package.json
 
 FROM base AS web
 
-RUN pnpm install --filter web... --frozen-lockfile
-
 COPY web ./web
+
+RUN pnpm install --filter web... --frozen-lockfile
 
 RUN pnpm --filter web exec prisma generate
 
@@ -24,7 +24,9 @@ CMD ["pnpm", "--filter", "web", "exec", "next", "dev", "--hostname", "0.0.0.0", 
 
 FROM base AS realtime
 
-RUN pnpm install --filter realtime... --frozen-lockfile
+COPY web/prisma ./web/prisma
+
+RUN pnpm install --frozen-lockfile
 
 COPY realtime ./realtime
 
@@ -32,4 +34,4 @@ EXPOSE 4000
 
 WORKDIR /app/realtime
 
-CMD ["pnpm", "--filter", "realtime", "dev"]
+CMD ["pnpm", "--filter", "realtime", "start"]

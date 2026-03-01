@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { extractPollId } from "@/lib/poll-links";
 
@@ -13,10 +13,14 @@ const GLOW_CYAN_STRONG = "rgba(79,255,216,0.55)";
 
 export default function Home() {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
 
   const [question, setQuestion] = useState("");
   const [options, setOptions] = useState<string[]>(DEFAULT_OPTIONS);
   const [joinId, setJoinId] = useState("");
+  const [allowAnonymousVotes, setAllowAnonymousVotes] = useState(true);
+  const [collectVoterEmail, setCollectVoterEmail] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -32,16 +36,19 @@ export default function Home() {
   const [authName, setAuthName] = useState("");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
+  const [authConfirmPassword, setAuthConfirmPassword] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSubmitting, setAuthSubmitting] = useState(false);
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isMyPollsOpen, setIsMyPollsOpen] = useState(false);
   const [isJoinedPollsOpen, setIsJoinedPollsOpen] = useState(false);
+  const [isVotersModalOpen, setIsVotersModalOpen] = useState(false);
   const [sidebarRight, setSidebarRight] = useState<number | null>(null);
   const sidebarButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const [pollsLoading, setPollsLoading] = useState(false);
+  const [pollsLoaded, setPollsLoaded] = useState(false);
   const [pollsError, setPollsError] = useState<string | null>(null);
   const [polls, setPolls] = useState<
     {
@@ -50,6 +57,10 @@ export default function Home() {
       createdAt: string;
       totalVotes: number;
       isOpen: boolean;
+      allowAnonymousVotes: boolean;
+      collectVoterEmail: boolean;
+      identifiedVotes: number;
+      anonymousVotes: number;
     }[]
   >([]);
   const [pollActionId, setPollActionId] = useState<string | null>(null);
@@ -58,7 +69,31 @@ export default function Home() {
     { id: string; question: string; joinedAt: string }[]
   >([]);
   const [joinedPollsLoading, setJoinedPollsLoading] = useState(false);
+  const [joinedPollsLoaded, setJoinedPollsLoaded] = useState(false);
   const [joinedPollsError, setJoinedPollsError] = useState<string | null>(null);
+  const [selectedVotersPoll, setSelectedVotersPoll] = useState<{
+    id: string;
+    question: string;
+  } | null>(null);
+  const [votersLoading, setVotersLoading] = useState(false);
+  const [votersError, setVotersError] = useState<string | null>(null);
+  const [voters, setVoters] = useState<
+    { email: string; optionText: string; votedAt: string }[]
+  >([]);
+  const [pollStatusFilter, setPollStatusFilter] = useState<"all" | "open" | "closed">(
+    (searchParams.get("status") as "all" | "open" | "closed") || "all",
+  );
+  const [pollSortField, setPollSortField] = useState<"createdAt" | "totalVotes">(
+    (searchParams.get("sort") as "createdAt" | "totalVotes") || "createdAt",
+  );
+  const [pollSortOrder, setPollSortOrder] = useState<"desc" | "asc">(
+    (searchParams.get("order") as "desc" | "asc") || "desc",
+  );
+  const [pollFromDate, setPollFromDate] = useState(searchParams.get("from") ?? "");
+  const [pollToDate, setPollToDate] = useState(searchParams.get("to") ?? "");
+  const [pollMinVotes, setPollMinVotes] = useState(searchParams.get("minVotes") ?? "");
+  const [pollMaxVotes, setPollMaxVotes] = useState(searchParams.get("maxVotes") ?? "");
+  const [pollQuery, setPollQuery] = useState(searchParams.get("q") ?? "");
 
   const updateOption = (index: number, value: string) => {
     setOptions((prev) => prev.map((option, i) => (i === index ? value : option)));
@@ -72,6 +107,12 @@ export default function Home() {
     return parsed.toLocaleDateString();
   };
 
+  const formatVoteDateTime = (value: string) => {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "Unknown time";
+    return parsed.toLocaleString();
+  };
+
   const handleCreate = async () => {
     setError(null);
     setIsSubmitting(true);
@@ -79,7 +120,12 @@ export default function Home() {
       const response = await fetch("/api/polls", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, options }),
+        body: JSON.stringify({
+          question,
+          options,
+          allowAnonymousVotes,
+          collectVoterEmail,
+        }),
       });
 
       if (!response.ok) {
@@ -88,6 +134,8 @@ export default function Home() {
       }
 
       const data = (await response.json()) as { pollId: string };
+      setAllowAnonymousVotes(true);
+      setCollectVoterEmail(false);
       router.push(`/poll/${data.pollId}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Something went wrong.";
@@ -117,6 +165,10 @@ export default function Home() {
 
   const handleAuthSubmit = async () => {
     setAuthError(null);
+    if (authMode === "signup" && authPassword !== authConfirmPassword) {
+      setAuthError("Passwords do not match.");
+      return;
+    }
     setAuthSubmitting(true);
     try {
       const response = await fetch(
@@ -127,6 +179,7 @@ export default function Home() {
           body: JSON.stringify({
             email: authEmail,
             password: authPassword,
+            confirmPassword: authMode === "signup" ? authConfirmPassword : undefined,
             name: authMode === "signup" ? authName : undefined,
           }),
         },
@@ -142,6 +195,7 @@ export default function Home() {
       };
       setSessionUser(data.user);
       setAuthPassword("");
+      setAuthConfirmPassword("");
       setAuthError(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to authenticate.";
@@ -154,6 +208,10 @@ export default function Home() {
   const handleLogout = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
     setSessionUser(null);
+    setPolls([]);
+    setJoinedPolls([]);
+    setPollsLoaded(false);
+    setJoinedPollsLoaded(false);
   };
 
   const updatePollStatus = async (pollId: string, nextIsOpen: boolean) => {
@@ -198,12 +256,65 @@ export default function Home() {
     }
   };
 
+  const openVotersModal = async (pollId: string, question: string) => {
+    if (!sessionUser) return;
+
+    setSelectedVotersPoll({ id: pollId, question });
+    setVoters([]);
+    setVotersError(null);
+    setVotersLoading(true);
+    setIsVotersModalOpen(true);
+
+    try {
+      const response = await fetch(`/api/polls/${pollId}/voters`);
+      if (!response.ok) {
+        const data = (await response.json()) as { error?: string };
+        throw new Error(data.error ?? "Unable to load voters.");
+      }
+      const data = (await response.json()) as {
+        voters: { email: string; optionText: string; votedAt: string }[];
+      };
+      setVoters(data.voters);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to load voters.";
+      setVotersError(message);
+    } finally {
+      setVotersLoading(false);
+    }
+  };
+
+  const getMyPollQueryParams = useCallback(() => {
+    const params = new URLSearchParams();
+    if (pollStatusFilter !== "all") params.set("status", pollStatusFilter);
+    if (pollSortField !== "createdAt") params.set("sort", pollSortField);
+    if (pollSortOrder !== "desc") params.set("order", pollSortOrder);
+    if (pollFromDate) params.set("from", pollFromDate);
+    if (pollToDate) params.set("to", pollToDate);
+    if (pollMinVotes.trim()) params.set("minVotes", pollMinVotes.trim());
+    if (pollMaxVotes.trim()) params.set("maxVotes", pollMaxVotes.trim());
+    if (pollQuery.trim()) params.set("q", pollQuery.trim());
+    return params;
+  }, [
+    pollFromDate,
+    pollMaxVotes,
+    pollMinVotes,
+    pollQuery,
+    pollSortField,
+    pollSortOrder,
+    pollStatusFilter,
+    pollToDate,
+  ]);
+
   const loadMyPolls = useCallback(async () => {
     if (!sessionUser) return;
     setPollsLoading(true);
     setPollsError(null);
     try {
-      const response = await fetch("/api/polls/mine");
+      const params = getMyPollQueryParams();
+      const query = params.toString();
+      const response = await fetch(
+        query ? `/api/polls/mine?${query}` : "/api/polls/mine",
+      );
       if (!response.ok) {
         const data = (await response.json()) as { error?: string };
         throw new Error(data.error ?? "Unable to load polls.");
@@ -215,6 +326,10 @@ export default function Home() {
           createdAt: string;
           totalVotes: number;
           isOpen: boolean;
+          allowAnonymousVotes: boolean;
+          collectVoterEmail: boolean;
+          identifiedVotes: number;
+          anonymousVotes: number;
         }[];
       };
       setPolls(data.polls);
@@ -223,8 +338,9 @@ export default function Home() {
       setPollsError(message);
     } finally {
       setPollsLoading(false);
+      setPollsLoaded(true);
     }
-  }, [sessionUser]);
+  }, [getMyPollQueryParams, sessionUser]);
 
   const loadJoinedPolls = useCallback(async () => {
     if (!sessionUser) return;
@@ -245,6 +361,7 @@ export default function Home() {
       setJoinedPollsError(message);
     } finally {
       setJoinedPollsLoading(false);
+      setJoinedPollsLoaded(true);
     }
   }, [sessionUser]);
 
@@ -253,8 +370,22 @@ export default function Home() {
   }, [isMyPollsOpen, loadMyPolls]);
 
   useEffect(() => {
+    const params = getMyPollQueryParams();
+    const next = params.toString();
+    const current = searchParams.toString();
+    if (next === current) return;
+    router.replace(next ? `${pathname}?${next}` : pathname);
+  }, [getMyPollQueryParams, pathname, router, searchParams]);
+
+  useEffect(() => {
     if (isJoinedPollsOpen) void loadJoinedPolls();
   }, [isJoinedPollsOpen, loadJoinedPolls]);
+
+  useEffect(() => {
+    if (!sessionUser) return;
+    if (!pollsLoaded) void loadMyPolls();
+    if (!joinedPollsLoaded) void loadJoinedPolls();
+  }, [joinedPollsLoaded, loadJoinedPolls, loadMyPolls, pollsLoaded, sessionUser]);
 
   useEffect(() => {
     if (!isSidebarOpen) return;
@@ -297,6 +428,23 @@ export default function Home() {
   const glassCard =
     "rounded-3xl border border-white/10 bg-white/5 p-8 text-white " +
     "shadow-[0_30px_120px_-85px_rgba(0,0,0,0.9)] backdrop-blur-2xl";
+
+  const hasPasswordMismatch =
+    authMode === "signup" &&
+    authPassword.length > 0 &&
+    authConfirmPassword.length > 0 &&
+    authPassword !== authConfirmPassword;
+
+  const resetMyPollFilters = () => {
+    setPollStatusFilter("all");
+    setPollSortField("createdAt");
+    setPollSortOrder("desc");
+    setPollFromDate("");
+    setPollToDate("");
+    setPollMinVotes("");
+    setPollMaxVotes("");
+    setPollQuery("");
+  };
 
   return (
     <div className="relative min-h-screen px-6 py-14 text-white">
@@ -426,6 +574,37 @@ export default function Home() {
                   </button>
                 </div>
 
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/75 backdrop-blur-xl">
+                  <p className="text-xs font-semibold uppercase tracking-[0.35em] text-white/45">
+                    Voter identity
+                  </p>
+                  <label className="mt-3 flex items-center justify-between gap-3">
+                    <span>Allow anonymous votes</span>
+                    <input
+                      type="checkbox"
+                      checked={allowAnonymousVotes}
+                      onChange={(event) => setAllowAnonymousVotes(event.target.checked)}
+                      className="h-4 w-4 accent-[rgba(79,255,216,0.95)]"
+                    />
+                  </label>
+                  <label className="mt-3 flex items-center justify-between gap-3">
+                    <span>Collect voter email</span>
+                    <input
+                      type="checkbox"
+                      checked={collectVoterEmail}
+                      onChange={(event) => setCollectVoterEmail(event.target.checked)}
+                      className="h-4 w-4 accent-[rgba(79,255,216,0.95)]"
+                    />
+                  </label>
+                  <p className="mt-3 text-xs text-white/55">
+                    {!collectVoterEmail
+                      ? "Email will not be collected for votes."
+                      : allowAnonymousVotes
+                        ? "Email is optional for voters."
+                        : "Email is required for every vote."}
+                  </p>
+                </div>
+
                 <button
                   type="button"
                   onClick={handleCreate}
@@ -443,6 +622,7 @@ export default function Home() {
                     onClick={() => {
                       setAuthMode("signup");
                       setAuthError(null);
+                      setAuthConfirmPassword("");
                     }}
                     className={`rounded-full border px-4 py-2 text-xs font-semibold transition backdrop-blur-xl ${
                       authMode === "signup"
@@ -457,6 +637,7 @@ export default function Home() {
                     onClick={() => {
                       setAuthMode("login");
                       setAuthError(null);
+                      setAuthConfirmPassword("");
                     }}
                     className={`rounded-full border px-4 py-2 text-xs font-semibold transition backdrop-blur-xl ${
                       authMode === "login"
@@ -491,17 +672,31 @@ export default function Home() {
                   type="password"
                   className={glassInput}
                 />
+                {authMode === "signup" ? (
+                  <input
+                    value={authConfirmPassword}
+                    onChange={(event) => setAuthConfirmPassword(event.target.value)}
+                    placeholder="Confirm password"
+                    type="password"
+                    className={glassInput}
+                  />
+                ) : null}
 
                 {authError ? (
                   <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200 backdrop-blur-xl">
                     {authError}
                   </div>
                 ) : null}
+                {!authError && hasPasswordMismatch ? (
+                  <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200 backdrop-blur-xl">
+                    Passwords do not match.
+                  </div>
+                ) : null}
 
                 <button
                   type="button"
                   onClick={handleAuthSubmit}
-                  disabled={authSubmitting}
+                  disabled={authSubmitting || hasPasswordMismatch}
                   className={glassButton}
                 >
                   {authSubmitting
@@ -588,7 +783,11 @@ export default function Home() {
                        shadow-[0_18px_60px_-45px_rgba(79,255,216,0.45)] transition
                        hover:border-[rgba(79,255,216,0.55)] hover:bg-[rgba(79,255,216,0.14)]"
           >
-            My polls
+            {sessionUser
+              ? pollsLoaded
+                ? `My polls (${polls.length})`
+                : "My polls (...)"
+              : "My polls"}
           </button>
 
           <button
@@ -601,19 +800,23 @@ export default function Home() {
             className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/80
                        backdrop-blur-xl transition hover:border-white/20 hover:bg-white/10 hover:text-white"
           >
-            Polls joined
+            {sessionUser
+              ? joinedPollsLoaded
+                ? `Polls joined (${joinedPolls.length})`
+                : "Polls joined (...)"
+              : "Polls joined"}
           </button>
         </div>
       </div>
 
       {/* My Polls Modal (glass) */}
       {isMyPollsOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-6 py-10 backdrop-blur-sm">
-          <div className="w-full max-w-3xl rounded-3xl border border-white/10 bg-white/5 p-6 text-white backdrop-blur-2xl shadow-[0_35px_120px_-80px_rgba(0,0,0,0.95)]">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/55 px-6 py-10 backdrop-blur-sm">
+          <div className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-3xl border border-white/10 bg-white/5 p-6 text-white backdrop-blur-2xl shadow-[0_35px_120px_-80px_rgba(0,0,0,0.95)]">
+            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 bg-[rgba(15,23,42,0.55)] pb-3 backdrop-blur-xl">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.3em] text-white/45">
-                  My polls
+                  My polls ({polls.length})
                 </p>
                 <h3 className="mt-2 text-2xl font-semibold text-white">Poll history</h3>
               </div>
@@ -626,7 +829,86 @@ export default function Home() {
               </button>
             </div>
 
-            <div className="mt-6 flex flex-col gap-4">
+            <div className="mt-3 flex flex-1 flex-col gap-4 overflow-y-auto pr-1">
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur-xl">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <input
+                    value={pollQuery}
+                    onChange={(event) => setPollQuery(event.target.value)}
+                    placeholder="Search question..."
+                    className={glassInput}
+                  />
+                  <select
+                    value={pollStatusFilter}
+                    onChange={(event) =>
+                      setPollStatusFilter(event.target.value as "all" | "open" | "closed")
+                    }
+                    className={glassInput}
+                  >
+                    <option value="all">All status</option>
+                    <option value="open">Open only</option>
+                    <option value="closed">Closed only</option>
+                  </select>
+                  <select
+                    value={pollSortField}
+                    onChange={(event) =>
+                      setPollSortField(event.target.value as "createdAt" | "totalVotes")
+                    }
+                    className={glassInput}
+                  >
+                    <option value="createdAt">Sort by create date</option>
+                    <option value="totalVotes">Sort by vote count</option>
+                  </select>
+                  <select
+                    value={pollSortOrder}
+                    onChange={(event) =>
+                      setPollSortOrder(event.target.value as "desc" | "asc")
+                    }
+                    className={glassInput}
+                  >
+                    <option value="desc">Descending</option>
+                    <option value="asc">Ascending</option>
+                  </select>
+                  <input
+                    type="date"
+                    value={pollFromDate}
+                    onChange={(event) => setPollFromDate(event.target.value)}
+                    className={glassInput}
+                  />
+                  <input
+                    type="date"
+                    value={pollToDate}
+                    onChange={(event) => setPollToDate(event.target.value)}
+                    className={glassInput}
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    value={pollMinVotes}
+                    onChange={(event) => setPollMinVotes(event.target.value)}
+                    placeholder="Min votes"
+                    className={glassInput}
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    value={pollMaxVotes}
+                    onChange={(event) => setPollMaxVotes(event.target.value)}
+                    placeholder="Max votes"
+                    className={glassInput}
+                  />
+                </div>
+                <div className="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={resetMyPollFilters}
+                    className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-white/75 backdrop-blur-xl transition hover:border-white/20 hover:bg-white/10 hover:text-white"
+                  >
+                    Clear filters
+                  </button>
+                </div>
+              </div>
+
               {!sessionUser ? (
                 <div className="rounded-2xl border border-[rgba(79,255,216,0.25)] bg-[rgba(79,255,216,0.10)] px-4 py-3 text-sm text-white/80 backdrop-blur-xl">
                   Sign in to view your polls.
@@ -660,9 +942,30 @@ export default function Home() {
                         {new Date(poll.createdAt).toLocaleDateString()} ·{" "}
                         {poll.totalVotes} votes · {poll.isOpen ? "Open" : "Closed"}
                       </p>
+                      {poll.collectVoterEmail ? (
+                        <p className="mt-1 text-xs text-white/50">
+                          Identity mode:{" "}
+                          {poll.allowAnonymousVotes ? "Optional email" : "Email required"}{" "}
+                          · {poll.identifiedVotes} identified · {poll.anonymousVotes}{" "}
+                          anonymous
+                        </p>
+                      ) : (
+                        <p className="mt-1 text-xs text-white/50">
+                          Identity mode: Anonymous only
+                        </p>
+                      )}
                     </div>
 
                     <div className="flex flex-col gap-2 sm:flex-row">
+                      {poll.collectVoterEmail ? (
+                        <button
+                          type="button"
+                          onClick={() => void openVotersModal(poll.id, poll.question)}
+                          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-white/80 backdrop-blur-xl transition hover:border-white/20 hover:bg-white/10 hover:text-white"
+                        >
+                          View voters
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         onClick={() => updatePollStatus(poll.id, !poll.isOpen)}
@@ -696,17 +999,76 @@ export default function Home() {
         </div>
       ) : null}
 
-      {/* Joined Polls Modal (glass) */}
-      {isJoinedPollsOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-6 py-10 backdrop-blur-sm">
-          <div className="w-full max-w-3xl rounded-3xl border border-white/10 bg-white/5 p-6 text-white backdrop-blur-2xl shadow-[0_35px_120px_-80px_rgba(0,0,0,0.95)]">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+      {/* Voters Modal (glass) */}
+      {isVotersModalOpen ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-slate-950/55 px-6 py-10 backdrop-blur-sm">
+          <div className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-3xl border border-white/10 bg-white/5 p-6 text-white backdrop-blur-2xl shadow-[0_35px_120px_-80px_rgba(0,0,0,0.95)]">
+            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 bg-[rgba(15,23,42,0.55)] pb-3 backdrop-blur-xl">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.3em] text-white/45">
-                  Polls joined
+                  Voter details
+                </p>
+                <h3 className="mt-2 text-xl font-semibold text-white">
+                  {selectedVotersPoll?.question ?? "Poll voters"}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsVotersModalOpen(false)}
+                className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-white/75 backdrop-blur-xl transition hover:border-white/20 hover:bg-white/10 hover:text-white"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-3 flex flex-1 flex-col gap-4 overflow-y-auto pr-1">
+              {votersLoading ? (
+                <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-6 text-sm text-white/65 backdrop-blur-xl">
+                  Loading voters...
+                </div>
+              ) : votersError ? (
+                <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200 backdrop-blur-xl">
+                  {votersError}
+                </div>
+              ) : voters.length === 0 ? (
+                <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-6 text-sm text-white/65 backdrop-blur-xl">
+                  No voter emails recorded for this poll yet.
+                </div>
+              ) : (
+                voters.map((voter, index) => (
+                  <div
+                    key={`${voter.email}-${voter.votedAt}-${index}`}
+                    className="rounded-2xl border border-white/10 bg-slate-950/25 px-4 py-4 backdrop-blur-xl"
+                    style={{
+                      boxShadow: `0 0 0 1px rgba(255,255,255,0.03), 0 0 70px -55px ${GLOW_CYAN}`,
+                    }}
+                  >
+                    <p className="text-sm font-semibold text-white">{voter.email}</p>
+                    <p className="mt-1 text-xs text-white/60">
+                      Voted for: {voter.optionText}
+                    </p>
+                    <p className="mt-1 text-xs text-white/50">
+                      {formatVoteDateTime(voter.votedAt)}
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Joined Polls Modal (glass) */}
+      {isJoinedPollsOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/55 px-6 py-10 backdrop-blur-sm">
+          <div className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-3xl border border-white/10 bg-white/5 p-6 text-white backdrop-blur-2xl shadow-[0_35px_120px_-80px_rgba(0,0,0,0.95)]">
+            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 bg-[rgba(15,23,42,0.55)] pb-3 backdrop-blur-xl">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.3em] text-white/45">
+                  Polls joined ({joinedPolls.length})
                 </p>
                 <h3 className="mt-2 text-2xl font-semibold text-white">
-                  Participation history
+                  Participation history (excluding your own polls)
                 </h3>
               </div>
               <button
@@ -718,7 +1080,7 @@ export default function Home() {
               </button>
             </div>
 
-            <div className="mt-6 flex flex-col gap-4">
+            <div className="mt-3 flex flex-1 flex-col gap-4 overflow-y-auto pr-1">
               {!sessionUser ? (
                 <div className="rounded-2xl border border-[rgba(79,255,216,0.25)] bg-[rgba(79,255,216,0.10)] px-4 py-3 text-sm text-white/80 backdrop-blur-xl">
                   Sign in to view joined polls.

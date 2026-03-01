@@ -7,6 +7,8 @@ import { getSessionCookieName, getSessionUserByToken } from "@/lib/auth";
 type CreatePollPayload = {
   question?: string;
   options?: string[];
+  allowAnonymousVotes?: boolean;
+  collectVoterEmail?: boolean;
 };
 
 export async function POST(request: Request) {
@@ -29,6 +31,26 @@ export async function POST(request: Request) {
   }
   const question = body.question?.trim();
   const options = body.options?.map((option) => option.trim()).filter(Boolean) ?? [];
+  if (
+    typeof body.allowAnonymousVotes !== "undefined" &&
+    typeof body.allowAnonymousVotes !== "boolean"
+  ) {
+    return NextResponse.json(
+      { error: "allowAnonymousVotes must be a boolean." },
+      { status: 400 },
+    );
+  }
+  if (
+    typeof body.collectVoterEmail !== "undefined" &&
+    typeof body.collectVoterEmail !== "boolean"
+  ) {
+    return NextResponse.json(
+      { error: "collectVoterEmail must be a boolean." },
+      { status: 400 },
+    );
+  }
+  const allowAnonymousVotes = body.allowAnonymousVotes ?? true;
+  const collectVoterEmail = body.collectVoterEmail ?? false;
 
   if (!question || options.length < 2) {
     return NextResponse.json(
@@ -41,6 +63,8 @@ export async function POST(request: Request) {
     data: {
       question,
       creatorId: user.id,
+      allowAnonymousVotes,
+      collectVoterEmail,
       options: {
         create: options.map((text, index) => ({
           text,

@@ -16,13 +16,21 @@ type PollClientProps = {
   initialCounts: Record<string, number>;
   initialTotal: number;
   initialIsOpen: boolean;
+  allowAnonymousVotes: boolean;
+  collectVoterEmail: boolean;
 };
 
 type PollStatePayload = {
   pollId: string;
   isOpen: boolean;
+  allowAnonymousVotes?: boolean;
+  collectVoterEmail?: boolean;
   counts: Record<string, number>;
   totalVotes: number;
+};
+
+type VoteErrorPayload = {
+  message?: string;
 };
 
 const VOTER_KEY = "one-vote:voter-id";
@@ -57,13 +65,20 @@ export default function PollClient({
   initialCounts,
   initialTotal,
   initialIsOpen,
+  allowAnonymousVotes: initialAllowAnonymousVotes,
+  collectVoterEmail: initialCollectVoterEmail,
 }: PollClientProps) {
   const router = useRouter();
 
   const [counts, setCounts] = useState<Record<string, number>>(initialCounts);
   const [totalVotes, setTotalVotes] = useState(initialTotal);
   const [isOpen, setIsOpen] = useState(initialIsOpen);
+  const [allowAnonymousVotes, setAllowAnonymousVotes] = useState(
+    initialAllowAnonymousVotes,
+  );
+  const [collectVoterEmail, setCollectVoterEmail] = useState(initialCollectVoterEmail);
   const [status, setStatus] = useState<"idle" | "casting" | "error">("idle");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [socketConnected, setSocketConnected] = useState(false);
 
   const [pollIdStatus, setPollIdStatus] = useState<"idle" | "copied" | "error">("idle");
@@ -107,11 +122,16 @@ export default function PollClient({
   }, [pollId]);
 
   useEffect(() => {
-    const socket: Socket = io(socketUrl);
+    const socket: Socket = io(socketUrl, {
+      transports: ["websocket", "polling"],
+      tryAllTransports: true,
+      timeout: 5000,
+    });
     socketRef.current = socket;
 
     socket.on("connect", () => {
       setSocketConnected(true);
+      setErrorMessage(null);
       socket.emit("join_poll", { pollId, voterId });
     });
 
@@ -119,14 +139,16 @@ export default function PollClient({
       setSocketConnected(false);
       if (castingRef.current) {
         setStatus("error");
+        setErrorMessage("Disconnected from realtime server.");
         castingRef.current = false;
       }
     });
 
-    socket.on("connect_error", () => {
+    socket.on("connect_error", (error) => {
       setSocketConnected(false);
       if (castingRef.current) {
         setStatus("error");
+        setErrorMessage(error.message || "Unable to reach realtime server.");
         castingRef.current = false;
       }
     });
@@ -136,6 +158,13 @@ export default function PollClient({
       setCounts(payload.counts);
       setTotalVotes(payload.totalVotes);
       setIsOpen(payload.isOpen);
+      if (typeof payload.allowAnonymousVotes === "boolean") {
+        setAllowAnonymousVotes(payload.allowAnonymousVotes);
+      }
+      if (typeof payload.collectVoterEmail === "boolean") {
+        setCollectVoterEmail(payload.collectVoterEmail);
+      }
+      setErrorMessage(null);
     });
 
     socket.on("poll_update", (payload: PollStatePayload) => {
@@ -143,7 +172,14 @@ export default function PollClient({
       setCounts(payload.counts);
       setTotalVotes(payload.totalVotes);
       setIsOpen(payload.isOpen);
+      if (typeof payload.allowAnonymousVotes === "boolean") {
+        setAllowAnonymousVotes(payload.allowAnonymousVotes);
+      }
+      if (typeof payload.collectVoterEmail === "boolean") {
+        setCollectVoterEmail(payload.collectVoterEmail);
+      }
       setStatus("idle");
+      setErrorMessage(null);
 
       if (castingRef.current) {
         void recordJoinedPoll();
@@ -151,8 +187,9 @@ export default function PollClient({
       }
     });
 
-    socket.on("vote_error", () => {
+    socket.on("vote_error", (payload: VoteErrorPayload) => {
       setStatus("error");
+      setErrorMessage(payload.message ?? "Vote rejected.");
       castingRef.current = false;
     });
 
@@ -174,11 +211,19 @@ export default function PollClient({
           counts: Record<string, number>;
           totalVotes: number;
           isOpen: boolean;
+          allowAnonymousVotes?: boolean;
+          collectVoterEmail?: boolean;
         };
         if (cancelled) return;
         setCounts(data.counts ?? {});
         setTotalVotes(data.totalVotes ?? 0);
         setIsOpen(Boolean(data.isOpen));
+        if (typeof data.allowAnonymousVotes === "boolean") {
+          setAllowAnonymousVotes(data.allowAnonymousVotes);
+        }
+        if (typeof data.collectVoterEmail === "boolean") {
+          setCollectVoterEmail(data.collectVoterEmail);
+        }
       } catch {
         // ignore network errors while reconnecting
       }
@@ -208,15 +253,25 @@ export default function PollClient({
     return () => window.clearTimeout(t);
   }, [shareStatus]);
 
-  const handleVote = (optionId: string) => {
+  const handleVote = (optionId: string, voterEmail?: string) => {
     if (!socketRef.current || !socketConnected) {
       setStatus("error");
+      setErrorMessage("Realtime connection is unavailable.");
       castingRef.current = false;
       return;
     }
     castingRef.current = true;
     setStatus("casting");
-    socketRef.current.emit("cast_vote", { pollId, optionId, voterId });
+    setErrorMessage(null);
+    socketRef.current.emit("cast_vote", { pollId, optionId, voterId, voterEmail });
+  };
+
+  const handleBack = () => {
+    if (window.history.length > 1) {
+      router.back();
+      return;
+    }
+    router.push("/");
   };
 
   return (
@@ -247,7 +302,7 @@ export default function PollClient({
           <div className="flex items-center justify-between gap-3">
             <button
               type="button"
-              onClick={() => router.back()}
+              onClick={handleBack}
               aria-label="Go back"
               className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/80 backdrop-blur-xl transition hover:border-white/20 hover:bg-white/10 hover:text-white"
             >
@@ -279,7 +334,7 @@ export default function PollClient({
             <span className={glassChip}>{totalVotes} total votes</span>
             {status === "error" ? (
               <span className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-xs font-semibold text-red-200 backdrop-blur-xl">
-                Vote rejected
+                {errorMessage ?? "Vote rejected"}
               </span>
             ) : null}
             {status === "casting" ? (
@@ -385,7 +440,22 @@ export default function PollClient({
             </div>
           </section>
 
-          <VoteForm options={options} isOpen={isOpen} onVote={handleVote} />
+          {isOpen ? (
+            <VoteForm
+              options={options}
+              isOpen={isOpen}
+              allowAnonymousVotes={allowAnonymousVotes}
+              collectVoterEmail={collectVoterEmail}
+              onVote={handleVote}
+            />
+          ) : (
+            <section className={`${glassCard} p-8`}>
+              <h2 className="text-xl font-semibold text-white">Voting closed</h2>
+              <p className="mt-3 text-sm text-white/65">
+                This poll is no longer accepting new votes.
+              </p>
+            </section>
+          )}
         </div>
       </div>
     </div>

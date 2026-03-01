@@ -126,6 +126,8 @@ io.on("connection", (socket) => {
       select: {
         id: true,
         isOpen: true,
+        allowAnonymousVotes: true,
+        collectVoterEmail: true,
         options: {
           select: { id: true },
           orderBy: { order: "asc" },
@@ -177,6 +179,8 @@ io.on("connection", (socket) => {
     socket.emit("poll_state", {
       pollId,
       isOpen: poll.isOpen,
+      allowAnonymousVotes: poll.allowAnonymousVotes,
+      collectVoterEmail: poll.collectVoterEmail,
       counts,
       totalVotes,
     });
@@ -188,10 +192,12 @@ io.on("connection", (socket) => {
       pollId,
       optionId,
       voterId,
+      voterEmail,
     }: {
       pollId?: string;
       optionId?: string;
       voterId?: string;
+      voterEmail?: string;
     }) => {
       if (!pollId || !optionId || !voterId) {
         socket.emit("vote_error", { message: "Invalid vote payload." });
@@ -203,6 +209,8 @@ io.on("connection", (socket) => {
         select: {
           id: true,
           isOpen: true,
+          allowAnonymousVotes: true,
+          collectVoterEmail: true,
           options: {
             select: { id: true },
             orderBy: { order: "asc" },
@@ -226,12 +234,23 @@ io.on("connection", (socket) => {
         return;
       }
 
+      const normalizedVoterEmail = voterEmail?.trim().toLowerCase();
+      if (normalizedVoterEmail && !/^[^@]+@[^@]+\.[^@]+$/.test(normalizedVoterEmail)) {
+        socket.emit("vote_error", { message: "Enter a valid email address." });
+        return;
+      }
+      if (poll.collectVoterEmail && !poll.allowAnonymousVotes && !normalizedVoterEmail) {
+        socket.emit("vote_error", { message: "Email is required for this poll." });
+        return;
+      }
+
       try {
         await prisma.vote.create({
           data: {
             pollId,
             optionId,
             voterId,
+            voterEmail: poll.collectVoterEmail ? normalizedVoterEmail : null,
           },
         });
       } catch (error) {
@@ -268,6 +287,8 @@ io.on("connection", (socket) => {
       io.to(`poll:${pollId}`).emit("poll_update", {
         pollId,
         isOpen: poll.isOpen,
+        allowAnonymousVotes: poll.allowAnonymousVotes,
+        collectVoterEmail: poll.collectVoterEmail,
         counts,
         totalVotes,
       });

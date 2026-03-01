@@ -14,6 +14,7 @@ type SignupPayload = {
   email?: string;
   name?: string;
   password?: string;
+  confirmPassword?: string;
 };
 
 const emailPattern = /^[^@]+@[^@]+\.[^@]+$/;
@@ -29,6 +30,7 @@ export async function POST(request: Request) {
   const email = body.email?.trim().toLowerCase();
   const name = body.name?.trim();
   const password = body.password ?? "";
+  const confirmPassword = body.confirmPassword ?? "";
 
   if (!email || !emailPattern.test(email)) {
     return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
@@ -39,6 +41,10 @@ export async function POST(request: Request) {
       { error: "Password must be at least 8 characters." },
       { status: 400 },
     );
+  }
+
+  if (password !== confirmPassword) {
+    return NextResponse.json({ error: "Passwords do not match." }, { status: 400 });
   }
 
   const existing = await prisma.user.findUnique({

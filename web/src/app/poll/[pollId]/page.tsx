@@ -80,6 +80,8 @@ export default async function PollPage({ params }: PageProps) {
       initialCounts={counts}
       initialTotal={totalVotes}
       initialIsOpen={poll.isOpen}
+      allowAnonymousVotes={poll.allowAnonymousVotes}
+      collectVoterEmail={poll.collectVoterEmail}
     />
   );
 }

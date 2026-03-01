@@ -8,22 +8,42 @@ type Option = { id: string; text: string };
 type VoteFormProps = {
   options: Option[];
   isOpen: boolean;
-  onVote: (optionId: string) => void;
+  allowAnonymousVotes: boolean;
+  collectVoterEmail: boolean;
+  onVote: (optionId: string, voterEmail?: string) => void;
 };
 
 const glassCard =
   "rounded-3xl border border-white/10 bg-white/5 p-6 text-white " +
   "shadow-[0_30px_120px_-85px_rgba(0,0,0,0.95)] backdrop-blur-2xl";
 
-export default function VoteForm({ options, isOpen, onVote }: VoteFormProps) {
+const emailPattern = /^[^@]+@[^@]+\.[^@]+$/;
+
+export default function VoteForm({
+  options,
+  isOpen,
+  allowAnonymousVotes,
+  collectVoterEmail,
+  onVote,
+}: VoteFormProps) {
   const [selected, setSelected] = useState<string | null>(null);
+  const [voterEmail, setVoterEmail] = useState("");
 
   const handleVote = () => {
     if (!selected) {
       window.alert("Pick an option before voting.");
       return;
     }
-    onVote(selected);
+    const normalizedEmail = voterEmail.trim().toLowerCase();
+    if (collectVoterEmail && !allowAnonymousVotes && !normalizedEmail) {
+      window.alert("Email is required for this poll.");
+      return;
+    }
+    if (normalizedEmail && !emailPattern.test(normalizedEmail)) {
+      window.alert("Enter a valid email address.");
+      return;
+    }
+    onVote(selected, normalizedEmail || undefined);
   };
 
   return (
@@ -33,6 +53,22 @@ export default function VoteForm({ options, isOpen, onVote }: VoteFormProps) {
       <p className="mt-2 text-sm text-white/65">
         {isOpen ? "Poll is open." : "Poll is closed."} Votes update live.
       </p>
+
+      {collectVoterEmail ? (
+        <div className="mt-4 flex flex-col gap-2">
+          <label className="text-xs font-semibold uppercase tracking-[0.28em] text-white/50">
+            Voter email {allowAnonymousVotes ? "(optional)" : "(required)"}
+          </label>
+          <input
+            type="email"
+            value={voterEmail}
+            onChange={(event) => setVoterEmail(event.target.value)}
+            placeholder="you@example.com"
+            className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white placeholder:text-white/40
+                       shadow-[0_0_0_1px_rgba(255,255,255,0.04)] focus:border-[rgba(79,255,216,0.55)] focus:outline-none focus:ring-2 focus:ring-[rgba(79,255,216,0.22)]"
+          />
+        </div>
+      ) : null}
 
       <div className="mt-5 flex flex-col gap-3">
         {options.map((option) => {

@@ -18,7 +18,14 @@ export async function GET() {
   }
 
   const participations = await prisma.pollParticipation.findMany({
-    where: { userId: user.id },
+    where: {
+      userId: user.id,
+      poll: {
+        creatorId: {
+          not: user.id,
+        },
+      },
+    },
     orderBy: { joinedAt: "desc" },
     include: {
       poll: {

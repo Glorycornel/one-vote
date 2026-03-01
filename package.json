@@ -13,8 +13,7 @@
     "lint:web": "pnpm --filter web lint",
     "lint:realtime": "pnpm --filter realtime lint",
     "format": "prettier --write .",
-    "prepare": "husky",
-    "postinstall": "pnpm --dir web exec prisma generate"
+    "prepare": "husky"
   },
   "devDependencies": {
     "husky": "^9.1.6",
@@ -31,8 +30,5 @@
     "realtime/**/*.{js,jsx,ts,tsx}": [
       "pnpm --filter realtime exec eslint --max-warnings=0"
     ]
-  },
-  "prisma": {
-    "schema": "web/prisma/schema.prisma"
   }
 }

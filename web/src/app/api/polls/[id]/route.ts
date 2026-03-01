@@ -63,6 +63,8 @@ export async function GET(_: NextRequest, { params }: Params) {
     pollId: poll.id,
     question: poll.question,
     isOpen: poll.isOpen,
+    allowAnonymousVotes: poll.allowAnonymousVotes,
+    collectVoterEmail: poll.collectVoterEmail,
     options: poll.options.map((option) => ({
       id: option.id,
       text: option.text,

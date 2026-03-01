@@ -25,11 +25,13 @@ services:
     restart: unless-stopped
     environment:
       PORT: "4000"
-      WEB_ORIGIN: "http://localhost:3000"
+      WEB_ORIGIN: "http://localhost:3000,http://127.0.0.1:3000"
       REDIS_URL: "redis://redis:6379"
+      DATABASE_URL: "postgresql://user:password@db:5432/one_vote?schema=public"
     ports:
       - "4000:4000"
     depends_on:
+      - db
       - redis
 
   web:
@@ -44,6 +46,9 @@ services:
       NEXT_PUBLIC_REALTIME_URL: "http://localhost:4000"
     ports:
       - "3000:3000"
+    command: >
+      sh -c "pnpm exec prisma migrate deploy &&
+      pnpm --filter web exec next dev --hostname 0.0.0.0 --port 3000"
     depends_on:
       - db
       - redis
