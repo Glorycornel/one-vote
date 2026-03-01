@@ -14,16 +14,51 @@ import {
 
 const app = express();
 const httpServer = createServer(app);
-const globalForPrisma = globalThis as { prisma?: PrismaClient };
-const prisma =
-  globalForPrisma.prisma ??
+const createPrismaClient = () =>
   new PrismaClient({
     log: ["error", "warn"],
   });
 
+const globalForPrisma = globalThis as { prisma?: PrismaClient };
+let prisma = globalForPrisma.prisma ?? createPrismaClient();
+
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;
 }
+
+const isClosedConnectionError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("Error in PostgreSQL connection: Error { kind: Closed") ||
+    message.includes("Can't reach database server")
+  );
+};
+
+const reconnectPrisma = async () => {
+  try {
+    await prisma.$disconnect();
+  } catch {
+    // ignore disconnect errors when re-initializing the client
+  }
+
+  prisma = createPrismaClient();
+  if (process.env.NODE_ENV !== "production") {
+    globalForPrisma.prisma = prisma;
+  }
+  await prisma.$connect();
+};
+
+const ensurePrismaConnected = async () => {
+  try {
+    await prisma.$connect();
+  } catch (error) {
+    if (!isClosedConnectionError(error)) {
+      throw error;
+    }
+    console.warn("Prisma connection was closed. Reconnecting...");
+    await reconnectPrisma();
+  }
+};
 
 const normalizeOrigin = (origin: string) => origin.replace(/\/$/, "");
 const webOriginEnv = process.env.WEB_ORIGIN ?? "http://localhost:3000";
@@ -78,6 +113,7 @@ const io = new Server(httpServer, {
 });
 
 const getCountsFromDatabase = async (pollId: string, options: PollOption[]) => {
+  await ensurePrismaConnected();
   const groupedVotes = await prisma.vote.groupBy({
     by: ["optionId"],
     where: { pollId },
@@ -117,93 +153,12 @@ io.on("connection", (socket) => {
   console.log("socket connected", socket.id);
 
   socket.on("join_poll", async ({ pollId }) => {
-    if (!pollId) {
-      socket.emit("vote_error", { message: "Poll ID is required." });
-      return;
-    }
-    const poll = await prisma.poll.findUnique({
-      where: { id: pollId },
-      select: {
-        id: true,
-        isOpen: true,
-        allowAnonymousVotes: true,
-        collectVoterEmail: true,
-        options: {
-          select: { id: true },
-          orderBy: { order: "asc" },
-        },
-      },
-    });
-
-    if (!poll) {
-      socket.emit("vote_error", { message: "Poll not found." });
-      return;
-    }
-
-    socket.join(`poll:${pollId}`);
-
-    const [openState, rawCounts, totalRaw] = await Promise.all([
-      redis.get(`poll:${pollId}:open`),
-      redis.hgetall(`poll:${pollId}:counts`),
-      redis.get(`poll:${pollId}:total`),
-    ]);
-
-    const hasRedisCounts = Object.keys(rawCounts).length > 0;
-    let counts = normalizeCounts(poll.options, rawCounts);
-    let totalVotes = totalRaw ? Number(totalRaw) || 0 : sumCounts(counts);
-
-    if (!hasRedisCounts) {
-      const dbCounts = await getCountsFromDatabase(pollId, poll.options);
-      counts = dbCounts.counts;
-      totalVotes = dbCounts.totalVotes;
-      await syncRedisState(pollId, poll.options, counts, totalVotes, poll.isOpen);
-    } else {
-      const missingOptions = poll.options.filter((option) => !(option.id in rawCounts));
-      if (
-        openState !== (poll.isOpen ? "1" : "0") ||
-        !totalRaw ||
-        missingOptions.length > 0
-      ) {
-        const pipeline = redis.multi();
-        pipeline.set(`poll:${pollId}:open`, poll.isOpen ? "1" : "0");
-        if (!totalRaw) {
-          pipeline.set(`poll:${pollId}:total`, String(totalVotes));
-        }
-        for (const option of missingOptions) {
-          pipeline.hset(`poll:${pollId}:counts`, option.id, "0");
-        }
-        await pipeline.exec();
-      }
-    }
-
-    socket.emit("poll_state", {
-      pollId,
-      isOpen: poll.isOpen,
-      allowAnonymousVotes: poll.allowAnonymousVotes,
-      collectVoterEmail: poll.collectVoterEmail,
-      counts,
-      totalVotes,
-    });
-  });
-
-  socket.on(
-    "cast_vote",
-    async ({
-      pollId,
-      optionId,
-      voterId,
-      voterEmail,
-    }: {
-      pollId?: string;
-      optionId?: string;
-      voterId?: string;
-      voterEmail?: string;
-    }) => {
-      if (!pollId || !optionId || !voterId) {
-        socket.emit("vote_error", { message: "Invalid vote payload." });
+    try {
+      await ensurePrismaConnected();
+      if (!pollId) {
+        socket.emit("vote_error", { message: "Poll ID is required." });
         return;
       }
-
       const poll = await prisma.poll.findUnique({
         where: { id: pollId },
         select: {
@@ -223,68 +178,43 @@ io.on("connection", (socket) => {
         return;
       }
 
-      if (!poll.options.some((option) => option.id === optionId)) {
-        socket.emit("vote_error", { message: "Invalid poll option." });
-        return;
-      }
+      socket.join(`poll:${pollId}`);
 
-      if (!poll.isOpen) {
-        await redis.set(`poll:${pollId}:open`, "0");
-        socket.emit("vote_error", { message: "Poll is closed." });
-        return;
-      }
-
-      const normalizedVoterEmail = voterEmail?.trim().toLowerCase();
-      if (normalizedVoterEmail && !/^[^@]+@[^@]+\.[^@]+$/.test(normalizedVoterEmail)) {
-        socket.emit("vote_error", { message: "Enter a valid email address." });
-        return;
-      }
-      if (poll.collectVoterEmail && !poll.allowAnonymousVotes && !normalizedVoterEmail) {
-        socket.emit("vote_error", { message: "Email is required for this poll." });
-        return;
-      }
-
-      try {
-        await prisma.vote.create({
-          data: {
-            pollId,
-            optionId,
-            voterId,
-            voterEmail: poll.collectVoterEmail ? normalizedVoterEmail : null,
-          },
-        });
-      } catch (error) {
-        if (isUniqueConstraintError(error)) {
-          socket.emit("vote_error", { message: "Vote already cast." });
-          return;
-        }
-        socket.emit("vote_error", { message: "Unable to record vote." });
-        return;
-      }
-
-      await redis
-        .multi()
-        .set(`poll:${pollId}:open`, "1")
-        .hincrby(`poll:${pollId}:counts`, optionId, 1)
-        .incr(`poll:${pollId}:total`)
-        .exec();
-
-      const [rawCounts, totalRaw] = await Promise.all([
+      const [openState, rawCounts, totalRaw] = await Promise.all([
+        redis.get(`poll:${pollId}:open`),
         redis.hgetall(`poll:${pollId}:counts`),
         redis.get(`poll:${pollId}:total`),
       ]);
 
+      const hasRedisCounts = Object.keys(rawCounts).length > 0;
       let counts = normalizeCounts(poll.options, rawCounts);
       let totalVotes = totalRaw ? Number(totalRaw) || 0 : sumCounts(counts);
 
-      if (!Object.keys(rawCounts).length) {
+      if (!hasRedisCounts) {
         const dbCounts = await getCountsFromDatabase(pollId, poll.options);
         counts = dbCounts.counts;
         totalVotes = dbCounts.totalVotes;
         await syncRedisState(pollId, poll.options, counts, totalVotes, poll.isOpen);
+      } else {
+        const missingOptions = poll.options.filter((option) => !(option.id in rawCounts));
+        if (
+          openState !== (poll.isOpen ? "1" : "0") ||
+          !totalRaw ||
+          missingOptions.length > 0
+        ) {
+          const pipeline = redis.multi();
+          pipeline.set(`poll:${pollId}:open`, poll.isOpen ? "1" : "0");
+          if (!totalRaw) {
+            pipeline.set(`poll:${pollId}:total`, String(totalVotes));
+          }
+          for (const option of missingOptions) {
+            pipeline.hset(`poll:${pollId}:counts`, option.id, "0");
+          }
+          await pipeline.exec();
+        }
       }
 
-      io.to(`poll:${pollId}`).emit("poll_update", {
+      socket.emit("poll_state", {
         pollId,
         isOpen: poll.isOpen,
         allowAnonymousVotes: poll.allowAnonymousVotes,
@@ -292,6 +222,128 @@ io.on("connection", (socket) => {
         counts,
         totalVotes,
       });
+    } catch (error) {
+      console.error("join_poll error", error);
+      socket.emit("vote_error", { message: "Unable to load poll state right now." });
+    }
+  });
+
+  socket.on(
+    "cast_vote",
+    async ({
+      pollId,
+      optionId,
+      voterId,
+      voterEmail,
+    }: {
+      pollId?: string;
+      optionId?: string;
+      voterId?: string;
+      voterEmail?: string;
+    }) => {
+      try {
+        await ensurePrismaConnected();
+        if (!pollId || !optionId || !voterId) {
+          socket.emit("vote_error", { message: "Invalid vote payload." });
+          return;
+        }
+
+        const poll = await prisma.poll.findUnique({
+          where: { id: pollId },
+          select: {
+            id: true,
+            isOpen: true,
+            allowAnonymousVotes: true,
+            collectVoterEmail: true,
+            options: {
+              select: { id: true },
+              orderBy: { order: "asc" },
+            },
+          },
+        });
+
+        if (!poll) {
+          socket.emit("vote_error", { message: "Poll not found." });
+          return;
+        }
+
+        if (!poll.options.some((option) => option.id === optionId)) {
+          socket.emit("vote_error", { message: "Invalid poll option." });
+          return;
+        }
+
+        if (!poll.isOpen) {
+          await redis.set(`poll:${pollId}:open`, "0");
+          socket.emit("vote_error", { message: "Poll is closed." });
+          return;
+        }
+
+        const normalizedVoterEmail = voterEmail?.trim().toLowerCase();
+        if (normalizedVoterEmail && !/^[^@]+@[^@]+\.[^@]+$/.test(normalizedVoterEmail)) {
+          socket.emit("vote_error", { message: "Enter a valid email address." });
+          return;
+        }
+        if (
+          poll.collectVoterEmail &&
+          !poll.allowAnonymousVotes &&
+          !normalizedVoterEmail
+        ) {
+          socket.emit("vote_error", { message: "Email is required for this poll." });
+          return;
+        }
+
+        try {
+          await prisma.vote.create({
+            data: {
+              pollId,
+              optionId,
+              voterId,
+              voterEmail: poll.collectVoterEmail ? normalizedVoterEmail : null,
+            },
+          });
+        } catch (error) {
+          if (isUniqueConstraintError(error)) {
+            socket.emit("vote_error", { message: "Vote already cast." });
+            return;
+          }
+          socket.emit("vote_error", { message: "Unable to record vote." });
+          return;
+        }
+
+        await redis
+          .multi()
+          .set(`poll:${pollId}:open`, "1")
+          .hincrby(`poll:${pollId}:counts`, optionId, 1)
+          .incr(`poll:${pollId}:total`)
+          .exec();
+
+        const [rawCounts, totalRaw] = await Promise.all([
+          redis.hgetall(`poll:${pollId}:counts`),
+          redis.get(`poll:${pollId}:total`),
+        ]);
+
+        let counts = normalizeCounts(poll.options, rawCounts);
+        let totalVotes = totalRaw ? Number(totalRaw) || 0 : sumCounts(counts);
+
+        if (!Object.keys(rawCounts).length) {
+          const dbCounts = await getCountsFromDatabase(pollId, poll.options);
+          counts = dbCounts.counts;
+          totalVotes = dbCounts.totalVotes;
+          await syncRedisState(pollId, poll.options, counts, totalVotes, poll.isOpen);
+        }
+
+        io.to(`poll:${pollId}`).emit("poll_update", {
+          pollId,
+          isOpen: poll.isOpen,
+          allowAnonymousVotes: poll.allowAnonymousVotes,
+          collectVoterEmail: poll.collectVoterEmail,
+          counts,
+          totalVotes,
+        });
+      } catch (error) {
+        console.error("cast_vote error", error);
+        socket.emit("vote_error", { message: "Service unavailable. Try again shortly." });
+      }
     },
   );
 
@@ -304,4 +356,14 @@ const port = Number(process.env.PORT ?? 4000);
 
 httpServer.listen(port, () => {
   console.log(`realtime server listening on :${port}`);
+});
+
+process.on("SIGTERM", async () => {
+  await prisma.$disconnect();
+  process.exit(0);
+});
+
+process.on("SIGINT", async () => {
+  await prisma.$disconnect();
+  process.exit(0);
 });
