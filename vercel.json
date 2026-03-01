@@ -1,3 +1,9 @@
 {
-  "buildCommand": "if [ -d web ]; then pnpm --dir web exec prisma migrate deploy && pnpm --dir web build; else pnpm exec prisma migrate deploy && pnpm build; fi"
+  "buildCommand": "if [ -d web ]; then pnpm --dir web exec prisma migrate deploy && pnpm --dir web build; else pnpm exec prisma migrate deploy && pnpm build; fi",
+  "crons": [
+    {
+      "path": "/api/cron/keepalive",
+      "schedule": "0 */6 * * *"
+    }
+  ]
 }
