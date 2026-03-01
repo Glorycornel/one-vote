@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { extractPollId } from "@/lib/poll-links";
 
@@ -13,8 +13,6 @@ const GLOW_CYAN_STRONG = "rgba(79,255,216,0.55)";
 
 export default function Home() {
   const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
 
   const [question, setQuestion] = useState("");
   const [options, setOptions] = useState<string[]>(DEFAULT_OPTIONS);
@@ -81,19 +79,18 @@ export default function Home() {
     { email: string; optionText: string; votedAt: string }[]
   >([]);
   const [pollStatusFilter, setPollStatusFilter] = useState<"all" | "open" | "closed">(
-    (searchParams.get("status") as "all" | "open" | "closed") || "all",
+    "all",
   );
   const [pollSortField, setPollSortField] = useState<"createdAt" | "totalVotes">(
-    (searchParams.get("sort") as "createdAt" | "totalVotes") || "createdAt",
+    "createdAt",
   );
-  const [pollSortOrder, setPollSortOrder] = useState<"desc" | "asc">(
-    (searchParams.get("order") as "desc" | "asc") || "desc",
-  );
-  const [pollFromDate, setPollFromDate] = useState(searchParams.get("from") ?? "");
-  const [pollToDate, setPollToDate] = useState(searchParams.get("to") ?? "");
-  const [pollMinVotes, setPollMinVotes] = useState(searchParams.get("minVotes") ?? "");
-  const [pollMaxVotes, setPollMaxVotes] = useState(searchParams.get("maxVotes") ?? "");
-  const [pollQuery, setPollQuery] = useState(searchParams.get("q") ?? "");
+  const [pollSortOrder, setPollSortOrder] = useState<"desc" | "asc">("desc");
+  const [pollFromDate, setPollFromDate] = useState("");
+  const [pollToDate, setPollToDate] = useState("");
+  const [pollMinVotes, setPollMinVotes] = useState("");
+  const [pollMaxVotes, setPollMaxVotes] = useState("");
+  const [pollQuery, setPollQuery] = useState("");
+  const [filtersInitialized, setFiltersInitialized] = useState(false);
 
   const updateOption = (index: number, value: string) => {
     setOptions((prev) => prev.map((option, i) => (i === index ? value : option)));
@@ -161,6 +158,29 @@ export default function Home() {
 
   useEffect(() => {
     void loadSession();
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("status");
+    const sort = params.get("sort");
+    const order = params.get("order");
+
+    if (status === "all" || status === "open" || status === "closed") {
+      setPollStatusFilter(status);
+    }
+    if (sort === "createdAt" || sort === "totalVotes") {
+      setPollSortField(sort);
+    }
+    if (order === "asc" || order === "desc") {
+      setPollSortOrder(order);
+    }
+    setPollFromDate(params.get("from") ?? "");
+    setPollToDate(params.get("to") ?? "");
+    setPollMinVotes(params.get("minVotes") ?? "");
+    setPollMaxVotes(params.get("maxVotes") ?? "");
+    setPollQuery(params.get("q") ?? "");
+    setFiltersInitialized(true);
   }, []);
 
   const handleAuthSubmit = async () => {
@@ -370,12 +390,16 @@ export default function Home() {
   }, [isMyPollsOpen, loadMyPolls]);
 
   useEffect(() => {
+    if (!filtersInitialized) return;
     const params = getMyPollQueryParams();
     const next = params.toString();
-    const current = searchParams.toString();
+    const current = window.location.search.replace(/^\?/, "");
     if (next === current) return;
-    router.replace(next ? `${pathname}?${next}` : pathname);
-  }, [getMyPollQueryParams, pathname, router, searchParams]);
+    const nextPath = next
+      ? `${window.location.pathname}?${next}`
+      : window.location.pathname;
+    window.history.replaceState({}, "", nextPath);
+  }, [filtersInitialized, getMyPollQueryParams]);
 
   useEffect(() => {
     if (isJoinedPollsOpen) void loadJoinedPolls();
